@@ -1,4 +1,4 @@
-package com.wxt.biconsumer.Entity.MongoEntity;
+package com.wxt.biconsumer.Entity;
 
 public class ResponseFormat {
     private int code;

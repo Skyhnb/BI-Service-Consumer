@@ -1,30 +1,41 @@
 package com.wxt.biconsumer.Service.MongoService;
 
-import com.wxt.biconsumer.Entity.MongoEntity.ResponseFormat;
+import com.wxt.biconsumer.Entity.MongoEntity.EntityNode;
+import com.wxt.biconsumer.Entity.MongoEntity.RelationById;
+import com.wxt.biconsumer.Entity.ResponseFormat;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 @FeignClient(name = "MongoQueryService", url = "${feign.Mongo}/query")
 public interface MongoQueryService {
     @GetMapping("/getSingleLinksByName/{nodeName}")
-    ResponseFormat getSingleLinkByName(@PathVariable("nodeName")String nodeName);
+    EntityNode getSingleLinkByName(@PathVariable("nodeName")String nodeName);
 
     @GetMapping("/getSingleLinksById/{uniqueId}")
-    ResponseFormat getSingleLinksById(@PathVariable("uniqueId") int uniqueId);
+    EntityNode getSingleLinksById(@PathVariable("uniqueId") int uniqueId);
 
     @GetMapping("/getEntityNameById/{uniqueId}")
-   ResponseFormat getEntityNameById(@PathVariable("uniqueId")int uniqueId);
+    String getEntityNameById(@PathVariable("uniqueId")int uniqueId);
 
     @GetMapping("/getEntityIdByName/{nodeName}")
-    ResponseFormat getEntityIdByName(@PathVariable("nodeName")String nodeName);
+    Integer getEntityIdByName(@PathVariable("nodeName")String nodeName);
 
     @GetMapping("/getBatch/{start}/{size}")
-    ResponseFormat getBatch(@PathVariable("start")int start, @PathVariable("size") int size);
+    List<EntityNode> getBatch(@PathVariable("start")int start, @PathVariable("size") int size);
 
-    @GetMapping("/getBatchIds/{start}/{size}")
-    ResponseFormat getBatchIds(@PathVariable("start")int start, @PathVariable("size") int size);
+    @PostMapping("/getBatchNamesByIds")
+    List<EntityNode> getBatchNamesByIds(@RequestBody List<Integer> ids);
 
     @GetMapping("/getMaxUniqueId")
-    ResponseFormat getMaxUniqueId();
+    Integer getMaxUniqueId();
+
+    @PostMapping("/getBatchRelations")
+    Map<Integer, Set<RelationById>> getBatchRelations(@RequestBody Map<Integer, List<Integer>> pairs);
 }
