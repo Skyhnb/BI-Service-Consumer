@@ -65,10 +65,10 @@ public class QueryService {
         if(g != null){
             return g;
         }
-        //List<List<Integer>> paths = neo4jQueryService.queryNodesPaths(new QueryEntity(id1, id2, skip_num, limit_num, max_jump_num));
-        List<List<Integer>> paths = new ArrayList<>();
-        paths.add(Arrays.asList(1, 4, 4066568));
-        paths.add(Arrays.asList(1, 1025109, 4387057, 12));
+        List<List<Integer>> paths = neo4jQueryService.queryNodesPaths(new QueryEntity(id1, id2, skip_num, limit_num, max_jump_num));
+        //List<List<Integer>> paths = new ArrayList<>();
+        //paths.add(Arrays.asList(1, 4, 4066568));
+        //paths.add(Arrays.asList(1, 1025109, 4387057, 12));
 
         Set<Integer> ids = new HashSet<>(paths.size() * 4);
         paths.forEach(ids::addAll);
@@ -255,7 +255,13 @@ public class QueryService {
 
 
     private void saveRelationsBetween(Map<Integer, Set<RelationById>> nonCachedRelations){
+        if(nonCachedRelations.size() == 0){
+            return;
+        }
         nonCachedRelations.forEach((left, rbiSet) -> {
+            if(rbiSet.size() == 0){
+                return;
+            }
             Map<Integer, String> m = new HashMap<>(rbiSet.size());
             rbiSet.forEach(rbi -> {
                 m.put(rbi.getEndUniqueId(), rbi.getRelation());
