@@ -4,6 +4,7 @@ import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.wxt.biconsumer.Entity.Graph;
 import com.wxt.biconsumer.Entity.MongoEntity.EntityNode;
+import com.wxt.biconsumer.Entity.MongoEntity.NodeToRelation;
 import com.wxt.biconsumer.Entity.MongoEntity.RelationById;
 import com.wxt.biconsumer.Entity.Neo4jEntity.QueryEntity;
 import com.wxt.biconsumer.Entity.ResponseFormat;
@@ -19,6 +20,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @Service
 public class QueryService {
@@ -49,6 +51,14 @@ public class QueryService {
     }
     public EntityNode getSingleLinksById(Integer uniqueId){
         return getSingleLinks(uniqueId);
+    }
+
+    public EntityNode getSingleLinksByIdPageble(Integer uniqueId, int startFrom, int limit){
+        return getSingleLinksPageable(uniqueId, startFrom, limit);
+    }
+
+    public EntityNode getSingleLinksByNamePageble(String name, int startFrom, int limit){
+        return getSingleLinksPageable(name, startFrom, limit);
     }
 
     public Graph getPathsByTwoNodes(String startNodeName,
@@ -82,20 +92,26 @@ public class QueryService {
                 nonCachedBatchIds.add(id);
             }
         });
-        List<EntityNode> tempNames = mongoQueryService.getBatchNamesByIds(nonCachedBatchIds);
-        if(tempNames == null){
-            return null;
+        if(nonCachedBatchIds.size() > 0){
+            List<EntityNode> tempNames = mongoQueryService.getBatchNamesByIds(nonCachedBatchIds);
+            if(tempNames == null){
+                return null;
+            }
+            tempNames.forEach(tn -> {
+                idToNames.put(tn.getUniqueId(), tn.getName());
+                cacheIdToName(tn.getUniqueId(), tn.getName());
+                cacheNameToId(tn.getName(), tn.getUniqueId());
+            });
         }
-        tempNames.forEach(tn -> idToNames.put(tn.getUniqueId(), tn.getName()));
 
-        Map<Integer, List<Integer>> pairs = new HashMap<>(ids.size());
+        Map<Integer, Set<Integer>> pairs = new HashMap<>(ids.size());
         paths.forEach(l -> {
             for (int i = 1; i < l.size(); i++) {
                 int left = l.get(i - 1);
                 int right = l.get(i);
                 pairs.compute(left, (key, data) -> {
                     if(data == null){
-                        data = new ArrayList<>(16);
+                        data = new HashSet<>(16);
                     }
                     data.add(right);
                     return data;
@@ -105,10 +121,11 @@ public class QueryService {
         Map<Integer, List<Integer>> nonCachedPairs = new HashMap<>(pairs.size());
         Map<Integer, Set<RelationById>> cachedRelations = new HashMap<>(pairs.size());
         pairs.forEach((key, l) -> {
-            List<String> relations = getCachedRelationBetween(key, l);
-            for (int i = 0; i < l.size(); i++) {
+            List<Integer> ll = new ArrayList<>(l);
+            List<List<RelationById>> relations = getCachedRelationBetween(key, ll);
+            for (int i = 0; i < ll.size(); i++) {
                 if(relations.get(i) == null){
-                    Integer tempId = l.get(i);
+                    Integer tempId = ll.get(i);
                     nonCachedPairs.compute(key, (k, nonCachedList) -> {
                         if(nonCachedList == null){
                             nonCachedList = new ArrayList<>(16);
@@ -117,18 +134,12 @@ public class QueryService {
                         return nonCachedList;
                     });
                 }else{
-                    String r = relations.get(i);
+                    List<RelationById> r = relations.get(i);//relations.get(i).stream().map(o -> JSON.toJavaObject(o, RelationById.class)).collect(Collectors.toList());
                     cachedRelations.compute(key, (k, v) -> {
                         if(v == null){
                             v = new HashSet<>();
                         }
-                        for (Integer right : l) {
-                            RelationById rbi = new RelationById();
-                            rbi.setStartUniqueId(k);
-                            rbi.setRelation(r);
-                            rbi.setEndUniqueId(right);
-                            v.add(rbi);
-                        }
+                        v.addAll(r);
                         return v;
                     });
                 }
@@ -148,11 +159,34 @@ public class QueryService {
                 return v;
             });
         });
-        return Graph.generateGraph(idToNames, cachedRelations);
+        g = Graph.generateGraph(idToNames, cachedRelations);
+        //redisTemplate.opsForValue().set(queryEntity.toString(), g);
+        return g;
     }
 
     public Double getSimilarityByTwoNodes(String name1, String name2){
-        return 0.;
+        Integer id1 = getNodeId(name1), id2 = getNodeId(name2);
+        if(id1 == null || id2 == null){
+            return null;
+        }
+        Double sim = (Double)redisTemplate.opsForValue().get(id1 + "_simwith_" + id2);
+        if(sim != null){
+            return sim;
+        }
+        EntityNode node1 = getSingleLinksById(id1);
+        EntityNode node2 = getSingleLinksById(id2);
+        Set<Integer> s1 = node1.getLinks().stream().map(NodeToRelation::getUniqueId).collect(Collectors.toSet());
+        Set<Integer> s2 = node2.getLinks().stream().map(NodeToRelation::getUniqueId).collect(Collectors.toSet());
+        Set<Integer> intersected = new HashSet<>(s1);
+        intersected.retainAll(s2);
+        int intersectedCount = intersected.size();
+        intersected = null;
+        s1.addAll(s2);
+        int unionCount = s1.size();
+        sim = intersectedCount * 1. / unionCount;
+        redisTemplate.opsForValue().set(id1 + "_simwith_" + id2, sim);
+        redisTemplate.opsForValue().set(id2 + "_simwith_" + id1, sim);
+        return sim;
     }
 
 
@@ -162,7 +196,6 @@ public class QueryService {
 
     private EntityNode getSingleLinks(Object param){
         EntityNode node = null;
-
         if(param instanceof String){
             node = getCachedEntityNodeByName((String)param);
             if(node == null){
@@ -181,6 +214,26 @@ public class QueryService {
         return node;
     }
 
+    private EntityNode getSingleLinksPageable(Object param, int startFrom, int limit){
+        EntityNode node = null;
+        if(param instanceof String){
+            node = getCachedEntityNodeByName((String)param);
+            if(node == null){
+                node = mongoQueryService.getSingleLinkByNamePageable((String)param, startFrom, limit);
+                cacheEntityNode(node);
+            }
+        }else if(param instanceof Integer){
+            node = getCachedEntityNodeById((Integer)param);
+            if(node == null){
+                node = mongoQueryService.getSingleLinksByIdPageable((Integer) param, startFrom, limit);
+                cacheEntityNode(node);
+            }
+        }else{
+            assert false;
+        }
+        return node;
+    }
+
     private String getSingleLinkRedisKey(Integer uniqueId){
         return uniqueId + "SingleLinks";
     }
@@ -189,18 +242,27 @@ public class QueryService {
         redisTemplate.opsForValue().setIfAbsent(getSingleLinkRedisKey(entityNode.getUniqueId()), entityNode);
         es.submit(() -> {
             Map cached = new HashMap();
-            Map<Integer, String> relations = new HashMap<>();
+            Set<RelationById> relations = new HashSet<>();
             entityNode.getLinks().forEach(nodeToRelation -> {
                 String name = nodeToRelation.getNode();
                 Integer uniqueId = nodeToRelation.getUniqueId();
                 cached.put(name + "name", uniqueId);
                 cached.put(uniqueId + "id", name);
-                relations.put(uniqueId, nodeToRelation.getRelation());
+                RelationById relationById = new RelationById();
+                relationById.setRelation(nodeToRelation.getRelation());
+                if(nodeToRelation.getDirection() == 1){
+                    relationById.setStartUniqueId(entityNode.getUniqueId());
+                    relationById.setEndUniqueId(uniqueId);
+                }else{
+                    relationById.setStartUniqueId(uniqueId);
+                    relationById.setEndUniqueId(entityNode.getUniqueId());
+                }
+                relations.add(relationById);
             });
             cached.put(entityNode.getName() + "name", entityNode.getUniqueId());
             cached.put(entityNode.getUniqueId() + "id", entityNode.getName());
             redisTemplate.opsForValue().multiSetIfAbsent(cached);
-            redisTemplate.opsForHash().putAll(entityNode.getUniqueId() + "relation", relations);
+            saveOneSetRelations(entityNode.getUniqueId(), relations);
         });
     }
 
@@ -213,20 +275,12 @@ public class QueryService {
         return (EntityNode) redisTemplate.opsForValue().get(getSingleLinkRedisKey(id));
     }
 
-    private String getNodeName(Integer uniqueId){
-        String name = getCachedNodeName(uniqueId);
-        if(name == null){
-            name = mongoQueryService.getEntityNameById(uniqueId);
-            cacheIdToName(uniqueId, name);
-        }
-        return name;
-    }
-
     private Integer getNodeId(String name){
         Integer id = getCachedUniqueId(name);
         if(id == null){
             id = mongoQueryService.getEntityIdByName(name);
             cacheNameToId(name, id);
+            cacheIdToName(id, name);
         }
         return id;
     }
@@ -248,8 +302,8 @@ public class QueryService {
     }
 
 
-    private List<String> getCachedRelationBetween(Integer id1, List<Integer> id2s){
-        List<String> list = redisTemplate.opsForHash().multiGet(id1 + "relation", id2s);
+    private List<List<RelationById>> getCachedRelationBetween(Integer id1, List<Integer> id2s){
+        List<List<RelationById>> list = redisTemplate.opsForHash().multiGet(id1 + "relation", id2s);
         return list;
     }
 
@@ -258,16 +312,24 @@ public class QueryService {
         if(nonCachedRelations.size() == 0){
             return;
         }
-        nonCachedRelations.forEach((left, rbiSet) -> {
-            if(rbiSet.size() == 0){
-                return;
-            }
-            Map<Integer, String> m = new HashMap<>(rbiSet.size());
-            rbiSet.forEach(rbi -> {
-                m.put(rbi.getEndUniqueId(), rbi.getRelation());
+        nonCachedRelations.forEach(this::saveOneSetRelations);
+    }
+
+    private void saveOneSetRelations(Integer id, Set<RelationById> set){
+        if(set.size() == 0){
+            return;
+        }
+        Map<Integer, List<RelationById>> m = new HashMap<>(set.size());
+        set.forEach(rbi -> {
+            m.compute(rbi.getEndUniqueId(), (k, v) -> {
+                if(v == null){
+                    v = new ArrayList<>(set.size());
+                }
+                v.add(rbi);
+                return v;
             });
-            redisTemplate.opsForHash().putAll(left + "relation", m);
         });
+        redisTemplate.opsForHash().putAll(id + "relation", m);
     }
 
 

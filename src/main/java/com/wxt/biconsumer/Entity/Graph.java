@@ -85,7 +85,9 @@ public class Graph {
     }
 
     public static class Link{
+        @JSONField(name = "d")
         private int direction;
+        @JSONField(name = "u")
         private int linkedUniqueId;
 
         public int getDirection() {

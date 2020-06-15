@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 
+import javax.websocket.server.PathParam;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -20,6 +21,12 @@ public interface MongoQueryService {
 
     @GetMapping("/getSingleLinksById/{uniqueId}")
     EntityNode getSingleLinksById(@PathVariable("uniqueId") int uniqueId);
+
+    @GetMapping("/getSingleLinksByNamePageable/{nodeName}/{startFrom}/{limit}")
+    EntityNode getSingleLinkByNamePageable(@PathVariable("nodeName")String nodeName, @PathVariable("startFrom")int startFrom, @PathVariable("limit")int limit);
+
+    @GetMapping("/getSingleLinksByIdPageable/{uniqueId}/{startFrom}/{limit}")
+    EntityNode getSingleLinksByIdPageable(@PathVariable("uniqueId") int uniqueId, @PathVariable("startFrom")int startFrom, @PathVariable("limit")int limit);
 
     @GetMapping("/getEntityNameById/{uniqueId}")
     String getEntityNameById(@PathVariable("uniqueId")int uniqueId);

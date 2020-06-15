@@ -37,6 +37,21 @@ public class QueryController {
         return wrap(res);
     }
 
+    //要求(a)
+    @GetMapping("/getSingleLinksByNamePageable/{nodeName}/{startFrom}/{limit}")
+    @ApiOperation("根据名字获取直接关联的点集合及关系")
+    public ResponseFormat getSingleLinkByNamePageable(@PathVariable("nodeName")String nodeName, @PathVariable("startFrom")Integer startFrom, @PathVariable("limit")Integer limit){
+        Object res = queryService.getSingleLinksByNamePageble(nodeName, startFrom, limit);
+        return wrap(res);
+    }
+
+    @GetMapping("/getSingleLinksByIdPageable/{uniqueId}/{startFrom}/{limit}")
+    @ApiOperation("根据Id获取直接关联的点集合及关系")
+    public ResponseFormat getSingleLinksByIdPageable(@PathVariable("uniqueId") Integer uniqueId, @PathVariable("startFrom")Integer startFrom, @PathVariable("limit")Integer limit){
+        Object res = queryService.getSingleLinksByIdPageble(uniqueId, startFrom, limit);
+        return wrap(res);
+    }
+
 
     //要求(b)
     @GetMapping("/getPathsByTwoNodes")

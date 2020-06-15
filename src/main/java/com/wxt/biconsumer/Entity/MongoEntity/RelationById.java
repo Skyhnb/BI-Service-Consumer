@@ -2,9 +2,10 @@ package com.wxt.biconsumer.Entity.MongoEntity;
 
 import com.alibaba.fastjson.annotation.JSONField;
 
+import java.io.Serializable;
 import java.util.Objects;
 
-public class RelationById {
+public class RelationById implements Serializable {
     @JSONField(name = "s")
     private int startUniqueId;
     @JSONField(name = "e")
