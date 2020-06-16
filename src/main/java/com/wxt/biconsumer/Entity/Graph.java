@@ -26,7 +26,6 @@ public class Graph {
         idToNames.forEach((id, name) -> {
             Node n = new Node();
             n.name = name;
-            n.uniqueId = id;
             g.nodes.put(id, n);
         });
         g.nodes.forEach((id, node) -> {
@@ -55,8 +54,9 @@ public class Graph {
     }
 
     public static class Node{
+        @JSONField(name = "n")
         private String name;
-        private Integer uniqueId;
+
         private Set<Link> links;
 
         public String getName() {
@@ -65,14 +65,6 @@ public class Graph {
 
         public void setName(String name) {
             this.name = name;
-        }
-
-        public Integer getUniqueId() {
-            return uniqueId;
-        }
-
-        public void setUniqueId(Integer uniqueId) {
-            this.uniqueId = uniqueId;
         }
 
         public Set<Link> getLinks() {

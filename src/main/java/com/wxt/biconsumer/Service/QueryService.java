@@ -160,7 +160,8 @@ public class QueryService {
             });
         });
         g = Graph.generateGraph(idToNames, cachedRelations);
-        //redisTemplate.opsForValue().set(queryEntity.toString(), g);
+        Graph p = g;
+        es.submit(() -> redisTemplate.opsForValue().set(queryEntity.toString(), p));
         return g;
     }
 
@@ -200,13 +201,13 @@ public class QueryService {
             node = getCachedEntityNodeByName((String)param);
             if(node == null){
                 node = mongoQueryService.getSingleLinkByName((String)param);
-                cacheEntityNode(node);
+                cacheEntityNode(node, true);
             }
         }else if(param instanceof Integer){
             node = getCachedEntityNodeById((Integer)param);
             if(node == null){
                 node = mongoQueryService.getSingleLinksById((Integer) param);
-                cacheEntityNode(node);
+                cacheEntityNode(node, true);
             }
         }else{
             assert false;
@@ -217,16 +218,16 @@ public class QueryService {
     private EntityNode getSingleLinksPageable(Object param, int startFrom, int limit){
         EntityNode node = null;
         if(param instanceof String){
-            node = getCachedEntityNodeByName((String)param);
+            node = getCachedEntityNodeByNamePageable((String)param, startFrom, limit);
             if(node == null){
                 node = mongoQueryService.getSingleLinkByNamePageable((String)param, startFrom, limit);
-                cacheEntityNode(node);
+                cacheEntityNodePageable(node, startFrom, limit);
             }
         }else if(param instanceof Integer){
-            node = getCachedEntityNodeById((Integer)param);
+            node = getCachedEntityNodeByIdPageable((Integer)param, startFrom, limit);
             if(node == null){
                 node = mongoQueryService.getSingleLinksByIdPageable((Integer) param, startFrom, limit);
-                cacheEntityNode(node);
+                cacheEntityNodePageable(node, startFrom, limit);
             }
         }else{
             assert false;
@@ -238,9 +239,20 @@ public class QueryService {
         return uniqueId + "SingleLinks";
     }
 
-    private void cacheEntityNode(EntityNode entityNode){
-        redisTemplate.opsForValue().setIfAbsent(getSingleLinkRedisKey(entityNode.getUniqueId()), entityNode);
+    private String getSingleLinkRedisKeyPageable(Integer uniqueId, int startFrom, int limit){
+        return "" + uniqueId + startFrom + limit + "SingleLinks";
+    }
+
+    private void cacheEntityNodePageable(EntityNode entityNode, int startFrom, int limit){
+        redisTemplate.opsForValue().setIfAbsent(getSingleLinkRedisKeyPageable(entityNode.getUniqueId(), startFrom, limit), entityNode);
+        cacheEntityNode(entityNode, false);
+    }
+
+    private void cacheEntityNode(EntityNode entityNode, boolean cacheSingleLink){
         es.submit(() -> {
+            if(cacheSingleLink) {
+                redisTemplate.opsForValue().setIfAbsent(getSingleLinkRedisKey(entityNode.getUniqueId()), entityNode);
+            }
             Map cached = new HashMap();
             Set<RelationById> relations = new HashSet<>();
             entityNode.getLinks().forEach(nodeToRelation -> {
@@ -272,8 +284,18 @@ public class QueryService {
 
     private EntityNode getCachedEntityNodeByName(String name){
         Integer id = getNodeId(name);
-        return (EntityNode) redisTemplate.opsForValue().get(getSingleLinkRedisKey(id));
+        return getCachedEntityNodeById(id);
     }
+
+    private EntityNode getCachedEntityNodeByIdPageable(Integer param, int startFrom, int limit){
+        return (EntityNode) redisTemplate.opsForValue().get(getSingleLinkRedisKeyPageable(param, startFrom, limit));
+    }
+
+    private EntityNode getCachedEntityNodeByNamePageable(String name, int startFrom, int limit){
+        Integer id = getNodeId(name);
+        return getCachedEntityNodeByIdPageable(id, startFrom, limit);
+    }
+
 
     private Integer getNodeId(String name){
         Integer id = getCachedUniqueId(name);
