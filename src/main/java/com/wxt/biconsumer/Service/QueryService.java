@@ -16,10 +16,8 @@ import org.springframework.stereotype.Service;
 import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
 import java.util.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 @Service
@@ -165,29 +163,77 @@ public class QueryService {
         return g;
     }
 
-    public Double getSimilarityByTwoNodes(String name1, String name2){
+    public Map getSimilarityByTwoNodes(String name1, String name2){
         Integer id1 = getNodeId(name1), id2 = getNodeId(name2);
         if(id1 == null || id2 == null){
             return null;
         }
-        Double sim = (Double)redisTemplate.opsForValue().get(id1 + "_simwith_" + id2);
-        if(sim != null){
-            return sim;
-        }
         EntityNode node1 = getSingleLinksById(id1);
         EntityNode node2 = getSingleLinksById(id2);
-        Set<Integer> s1 = node1.getLinks().stream().map(NodeToRelation::getUniqueId).collect(Collectors.toSet());
-        Set<Integer> s2 = node2.getLinks().stream().map(NodeToRelation::getUniqueId).collect(Collectors.toSet());
-        Set<Integer> intersected = new HashSet<>(s1);
-        intersected.retainAll(s2);
-        int intersectedCount = intersected.size();
-        intersected = null;
-        s1.addAll(s2);
-        int unionCount = s1.size();
-        sim = intersectedCount * 1. / unionCount;
-        redisTemplate.opsForValue().set(id1 + "_simwith_" + id2, sim);
-        redisTemplate.opsForValue().set(id2 + "_simwith_" + id1, sim);
-        return sim;
+        Future<Double> jaccardTask = es.submit(() -> {
+            Double sim = (Double)redisTemplate.opsForValue().get(id1 + "_jaccardwith_" + id2);
+            if(sim != null){
+                return sim;
+            }
+            Set<Integer> s1 = node1.getLinks().stream().map(NodeToRelation::getUniqueId).collect(Collectors.toSet());
+            Set<Integer> s2 = node2.getLinks().stream().map(NodeToRelation::getUniqueId).collect(Collectors.toSet());
+            Set<Integer> intersected = new HashSet<>(s1);
+            intersected.retainAll(s2);
+            int intersectedCount = intersected.size();
+            intersected = null;
+            s1.addAll(s2);
+            int unionCount = s1.size();
+            s1 = null; s2 = null;
+            sim = intersectedCount * 1. / unionCount;
+            redisTemplate.opsForValue().set(id1 + "_jaccardwith_" + id2, sim);
+            redisTemplate.opsForValue().set(id2 + "_jaccardwith_" + id1, sim);
+            return sim;
+        });
+        Future<Double> consineTask = es.submit(() -> {
+            Double sim = (Double)redisTemplate.opsForValue().get(id1 + "_cosinewith_" + id2);
+            if(sim != null){
+                return sim;
+            }
+            Map<String, Integer> bits = new HashMap<>(128);
+            EntityNode[] nodes = {node1, node2};
+            AtomicInteger index = new AtomicInteger(0);
+            Arrays.stream(nodes).forEach(n -> n.getLinks().forEach(ntr -> bits.computeIfAbsent(ntr.getNode() + "___connects___" + ntr.getRelation(), (k) -> index.getAndIncrement())));
+            int[] vector1 = new int[bits.size()];
+            int[] vector2 = new int[bits.size()];
+            node1.getLinks().forEach(ntr -> {
+                String b = ntr.getNode() + "___connects___" + ntr.getRelation();
+                vector1[bits.get(b)]++;
+            });
+            node2.getLinks().forEach(ntr -> {
+                String b = ntr.getNode() + "___connects___" + ntr.getRelation();
+                vector2[bits.get(b)]++;
+            });
+            //cal consine similarity
+            double non = 0.;
+            for (int i = 0; i < bits.size(); i++) {
+                non += vector1[i] * vector2[i];
+            }
+            double den1 = 0., den2 = 0.;
+            for (int i : vector1) {
+                den1 += Math.pow(i, 2);
+            }
+            for (int i : vector2) {
+                den2 += Math.pow(i, 2);
+            }
+            double den = Math.sqrt(den1 * den2);
+            sim = non / den;
+            redisTemplate.opsForValue().set(id1 + "_cosinewith_" + id2, sim);
+            return sim;
+        });
+        Map<String, Double> sims = new HashMap<>();
+        try{
+            Double jaccard = jaccardTask.get();
+            Double cosine  = consineTask.get();
+            sims.put("Jaccard", jaccard); sims.put("Cosine", cosine);
+            return sims;
+        }catch (Exception e){
+            return null;
+        }
     }
 
 
