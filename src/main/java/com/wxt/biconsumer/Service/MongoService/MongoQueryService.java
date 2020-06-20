@@ -45,4 +45,11 @@ public interface MongoQueryService {
 
     @PostMapping("/getBatchRelations")
     Map<Integer, Set<RelationById>> getBatchRelations(@RequestBody Map<Integer, List<Integer>> pairs);
+
+    @GetMapping("/getSingleLinksCountById/{id}")
+    Integer getSingleLinksCountById(@PathVariable("id")Integer id);
+
+    @GetMapping("/getSingleLinksCountByName/{nodeName}")
+    Integer getSingleLinksCountByName(@PathVariable("nodeName")String nodeName);
+
 }

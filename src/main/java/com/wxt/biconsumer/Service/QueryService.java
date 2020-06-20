@@ -11,6 +11,7 @@ import com.wxt.biconsumer.Entity.ResponseFormat;
 import com.wxt.biconsumer.Service.MongoService.MongoQueryService;
 import com.wxt.biconsumer.Service.Neo4jService.Neo4jQueryService;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.stereotype.Component;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
@@ -32,17 +33,11 @@ public class QueryService {
     @Resource
     private RedisTemplate redisTemplate;
 
-    private ExecutorService es;
+    @Resource
+    private DataAccessHelper dah;
 
-    @PostConstruct
-    private void init(){
-        es = new ThreadPoolExecutor(5,
-                20,
-                60,
-                TimeUnit.SECONDS,
-                new LinkedBlockingQueue<>(),
-                new ThreadPoolExecutor.AbortPolicy());
-    }
+    @Resource
+    private ThreadPoolHelper threadPoolHelper;
 
     public EntityNode getSingleLinkByName(String nodeName){
         return getSingleLinks(nodeName);
@@ -64,12 +59,12 @@ public class QueryService {
                                     Integer skip_num,       //跳过的边数
                                     Integer limit_num,      //返回的边数
                                     Integer max_jump_num){
-        Integer id1 = getNodeId(startNodeName), id2 = getNodeId(endNodeName);
+        Integer id1 = dah.getNodeId(startNodeName), id2 = dah.getNodeId(endNodeName);
         if(id1 == null || id2 == null){
             return null;
         }
         QueryEntity queryEntity = new QueryEntity(id1, id2, skip_num, limit_num, max_jump_num);
-        Graph g = (Graph)redisTemplate.opsForValue().get(queryEntity.toString());
+        Graph g = dah.getCachedGraph(queryEntity);
         if(g != null){
             return g;
         }
@@ -83,7 +78,7 @@ public class QueryService {
         Map<Integer, String> idToNames = new HashMap<>(ids.size());
         List<Integer> nonCachedBatchIds = new ArrayList<>(ids.size());
         ids.forEach(id -> {
-            String name = getCachedNodeName(id);
+            String name = dah.getCachedNodeName(id);
             if(name != null){
                 idToNames.put(id, name);
             }else{
@@ -97,8 +92,8 @@ public class QueryService {
             }
             tempNames.forEach(tn -> {
                 idToNames.put(tn.getUniqueId(), tn.getName());
-                cacheIdToName(tn.getUniqueId(), tn.getName());
-                cacheNameToId(tn.getName(), tn.getUniqueId());
+                dah.cacheIdToName(tn.getUniqueId(), tn.getName());
+                dah.cacheNameToId(tn.getName(), tn.getUniqueId());
             });
         }
 
@@ -120,7 +115,7 @@ public class QueryService {
         Map<Integer, Set<RelationById>> cachedRelations = new HashMap<>(pairs.size());
         pairs.forEach((key, l) -> {
             List<Integer> ll = new ArrayList<>(l);
-            List<List<RelationById>> relations = getCachedRelationBetween(key, ll);
+            List<List<RelationById>> relations = dah.getCachedRelationBetween(key, ll);
             for (int i = 0; i < ll.size(); i++) {
                 if(relations.get(i) == null){
                     Integer tempId = ll.get(i);
@@ -147,7 +142,7 @@ public class QueryService {
         if(nonCachedRelations == null){
             return null;
         }
-        saveRelationsBetween(nonCachedRelations);
+        dah.saveRelationsBetween(nonCachedRelations);
         nonCachedRelations.forEach((left, r) -> {
             cachedRelations.compute(left, (k, v) -> {
                 if(v == null){
@@ -159,18 +154,18 @@ public class QueryService {
         });
         g = Graph.generateGraph(idToNames, cachedRelations);
         Graph p = g;
-        es.submit(() -> redisTemplate.opsForValue().set(queryEntity.toString(), p));
+        threadPoolHelper.es.submit(() -> dah.cacheGraph(queryEntity, p));
         return g;
     }
 
     public Map getSimilarityByTwoNodes(String name1, String name2){
-        Integer id1 = getNodeId(name1), id2 = getNodeId(name2);
+        Integer id1 = dah.getNodeId(name1), id2 = dah.getNodeId(name2);
         if(id1 == null || id2 == null){
             return null;
         }
         EntityNode node1 = getSingleLinksById(id1);
         EntityNode node2 = getSingleLinksById(id2);
-        Future<Double> jaccardTask = es.submit(() -> {
+        Future<Double> jaccardTask = threadPoolHelper.es.submit(() -> {
             Double sim = (Double)redisTemplate.opsForValue().get(id1 + "_jaccardwith_" + id2);
             if(sim != null){
                 return sim;
@@ -185,12 +180,11 @@ public class QueryService {
             int unionCount = s1.size();
             s1 = null; s2 = null;
             sim = intersectedCount * 1. / unionCount;
-            redisTemplate.opsForValue().set(id1 + "_jaccardwith_" + id2, sim);
-            redisTemplate.opsForValue().set(id2 + "_jaccardwith_" + id1, sim);
+            dah.cacheSim(id1, id2, sim, true);
             return sim;
         });
-        Future<Double> consineTask = es.submit(() -> {
-            Double sim = (Double)redisTemplate.opsForValue().get(id1 + "_cosinewith_" + id2);
+        Future<Double> consineTask = threadPoolHelper.es.submit(() -> {
+            Double sim = dah.getCachedSim(id1, id2, false);
             if(sim != null){
                 return sim;
             }
@@ -222,7 +216,7 @@ public class QueryService {
             }
             double den = Math.sqrt(den1 * den2);
             sim = non / den;
-            redisTemplate.opsForValue().set(id1 + "_cosinewith_" + id2, sim);
+            dah.cacheSim(id1, id2, sim, false);
             return sim;
         });
         Map<String, Double> sims = new HashMap<>();
@@ -237,23 +231,46 @@ public class QueryService {
     }
 
 
+    public Integer getSingleLinksCountByName(String name){
+        Integer id = dah.getCachedUniqueId(name);
+        Integer count = dah.getCachedSingleLinksCount(id);
+        if(count != null){
+            return count;
+        }
+        if(id == null){
+            count = mongoQueryService.getSingleLinksCountByName(name);
+        }else{
+            count = mongoQueryService.getSingleLinksCountById(id);
+        }
+        dah.cacheSingleLinksCount(id, count);
+        return count;
+    }
+
+    public int getSingleLinksCountById(Integer id){
+        Integer count = dah.getCachedSingleLinksCount(id);
+        if(count != null){
+            return count;
+        }
+        count = mongoQueryService.getSingleLinksCountById(id);
+        dah.cacheSingleLinksCount(id, count);
+        return count;
+    }
 
 
-    //private utils
 
     private EntityNode getSingleLinks(Object param){
         EntityNode node = null;
         if(param instanceof String){
-            node = getCachedEntityNodeByName((String)param);
+            node = dah.getCachedEntityNodeByName((String)param);
             if(node == null){
                 node = mongoQueryService.getSingleLinkByName((String)param);
-                cacheEntityNode(node, true);
+                dah.cacheEntityNode(node, true);
             }
         }else if(param instanceof Integer){
-            node = getCachedEntityNodeById((Integer)param);
+            node = dah.getCachedEntityNodeById((Integer)param);
             if(node == null){
                 node = mongoQueryService.getSingleLinksById((Integer) param);
-                cacheEntityNode(node, true);
+                dah.cacheEntityNode(node, true);
             }
         }else{
             assert false;
@@ -264,22 +281,115 @@ public class QueryService {
     private EntityNode getSingleLinksPageable(Object param, int startFrom, int limit){
         EntityNode node = null;
         if(param instanceof String){
-            node = getCachedEntityNodeByNamePageable((String)param, startFrom, limit);
+            node = dah.getCachedEntityNodeByNamePageable((String)param, startFrom, limit);
             if(node == null){
                 node = mongoQueryService.getSingleLinkByNamePageable((String)param, startFrom, limit);
-                cacheEntityNodePageable(node, startFrom, limit);
+                dah.cacheEntityNodePageable(node, startFrom, limit);
             }
         }else if(param instanceof Integer){
-            node = getCachedEntityNodeByIdPageable((Integer)param, startFrom, limit);
+            node = dah.getCachedEntityNodeByIdPageable((Integer)param, startFrom, limit);
             if(node == null){
                 node = mongoQueryService.getSingleLinksByIdPageable((Integer) param, startFrom, limit);
-                cacheEntityNodePageable(node, startFrom, limit);
+                dah.cacheEntityNodePageable(node, startFrom, limit);
             }
         }else{
             assert false;
         }
         return node;
     }
+
+    private Map<Integer, Set<RelationById>> getBatchRelations(Map<Integer, List<Integer>> pairs){
+        return mongoQueryService.getBatchRelations(pairs);
+    }
+
+}
+
+@Component
+class DataAccessHelper{
+
+    @Resource
+    private RedisTemplate redisTemplate;
+
+    @Resource
+    private MongoQueryService mongoQueryService;
+
+    @Resource
+    private ThreadPoolHelper threadPoolHelper;
+
+    String getCachedNodeName(Integer uniqueId){
+        return (String)redisTemplate.opsForValue().get(uniqueId + "id");
+    }
+
+    Integer getCachedUniqueId(String name){
+        return (Integer)redisTemplate.opsForValue().get(name + "name");
+    }
+
+    void cacheIdToName(Integer id, String name){
+        redisTemplate.opsForValue().setIfAbsent(id + "id", name);
+    }
+
+    void cacheNameToId(String name, Integer id){
+        redisTemplate.opsForValue().setIfAbsent(name + "name", id);
+    }
+
+    EntityNode getCachedEntityNodeById(Integer param){
+        return (EntityNode) redisTemplate.opsForValue().get(getSingleLinkRedisKey(param));
+    }
+
+    Integer getNodeId(String name){
+        Integer id = getCachedUniqueId(name);
+        if(id == null){
+            id = mongoQueryService.getEntityIdByName(name);
+            cacheNameToId(name, id);
+            cacheIdToName(id, name);
+        }
+        return id;
+    }
+
+    EntityNode getCachedEntityNodeByName(String name){
+        Integer id = getNodeId(name);
+        return getCachedEntityNodeById(id);
+    }
+
+    EntityNode getCachedEntityNodeByIdPageable(Integer param, int startFrom, int limit){
+        return (EntityNode) redisTemplate.opsForValue().get(getSingleLinkRedisKeyPageable(param, startFrom, limit));
+    }
+
+    EntityNode getCachedEntityNodeByNamePageable(String name, int startFrom, int limit){
+        Integer id = getNodeId(name);
+        return getCachedEntityNodeByIdPageable(id, startFrom, limit);
+    }
+
+    void saveOneSetRelations(Integer id, Set<RelationById> set){
+        if(set.size() == 0){
+            return;
+        }
+        Map<Integer, List<RelationById>> m = new HashMap<>(set.size());
+        set.forEach(rbi -> {
+            m.compute(rbi.getEndUniqueId(), (k, v) -> {
+                if(v == null){
+                    v = new ArrayList<>(set.size());
+                }
+                v.add(rbi);
+                return v;
+            });
+        });
+        redisTemplate.opsForHash().putAll(id + "relation", m);
+    }
+
+    List<List<RelationById>> getCachedRelationBetween(Integer id1, List<Integer> id2s){
+        List<List<RelationById>> list = redisTemplate.opsForHash().multiGet(id1 + "relation", id2s);
+        return list;
+    }
+
+
+    void saveRelationsBetween(Map<Integer, Set<RelationById>> nonCachedRelations){
+        if(nonCachedRelations.size() == 0){
+            return;
+        }
+        nonCachedRelations.forEach(this::saveOneSetRelations);
+    }
+
 
     private String getSingleLinkRedisKey(Integer uniqueId){
         return uniqueId + "SingleLinks";
@@ -289,13 +399,13 @@ public class QueryService {
         return "" + uniqueId + startFrom + limit + "SingleLinks";
     }
 
-    private void cacheEntityNodePageable(EntityNode entityNode, int startFrom, int limit){
+    void cacheEntityNodePageable(EntityNode entityNode, int startFrom, int limit){
         redisTemplate.opsForValue().setIfAbsent(getSingleLinkRedisKeyPageable(entityNode.getUniqueId(), startFrom, limit), entityNode);
         cacheEntityNode(entityNode, false);
     }
 
-    private void cacheEntityNode(EntityNode entityNode, boolean cacheSingleLink){
-        es.submit(() -> {
+    void cacheEntityNode(EntityNode entityNode, boolean cacheSingleLink){
+        threadPoolHelper.es.submit(() -> {
             if(cacheSingleLink) {
                 redisTemplate.opsForValue().setIfAbsent(getSingleLinkRedisKey(entityNode.getUniqueId()), entityNode);
             }
@@ -324,84 +434,53 @@ public class QueryService {
         });
     }
 
-    private EntityNode getCachedEntityNodeById(Integer param){
-        return (EntityNode) redisTemplate.opsForValue().get(getSingleLinkRedisKey(param));
+    Graph getCachedGraph(QueryEntity queryEntity){
+        return (Graph)redisTemplate.opsForValue().get(queryEntity.toString());
     }
 
-    private EntityNode getCachedEntityNodeByName(String name){
-        Integer id = getNodeId(name);
-        return getCachedEntityNodeById(id);
+    void cacheGraph(QueryEntity queryEntity, Graph graph){
+        redisTemplate.opsForValue().set(queryEntity.toString(), graph);
     }
 
-    private EntityNode getCachedEntityNodeByIdPageable(Integer param, int startFrom, int limit){
-        return (EntityNode) redisTemplate.opsForValue().get(getSingleLinkRedisKeyPageable(param, startFrom, limit));
+    private static String jaccardConnects = "_jaccardwith_";
+    private static String cosineConnects =  "_cosinewith_";
+
+    void cacheSim(Integer id1, Integer id2, Double sim, boolean isJaccard){
+        String connects = isJaccard ? jaccardConnects : cosineConnects;
+        redisTemplate.opsForValue().set(id1 + connects + id2, sim);
+        redisTemplate.opsForValue().set(id2 + connects + id1, sim);
     }
 
-    private EntityNode getCachedEntityNodeByNamePageable(String name, int startFrom, int limit){
-        Integer id = getNodeId(name);
-        return getCachedEntityNodeByIdPageable(id, startFrom, limit);
-    }
-
-
-    private Integer getNodeId(String name){
-        Integer id = getCachedUniqueId(name);
-        if(id == null){
-            id = mongoQueryService.getEntityIdByName(name);
-            cacheNameToId(name, id);
-            cacheIdToName(id, name);
+    Double getCachedSim(Integer id1, Integer id2, boolean isJaccard){
+        String connects = isJaccard ? jaccardConnects : cosineConnects;
+        Double res = (Double)redisTemplate.opsForValue().get(id1 + connects + id2);
+        if(res != null){
+            return res;
         }
-        return id;
+        res = (Double)redisTemplate.opsForValue().get(id2 + connects + id1);
+        return res;
     }
 
-    private String getCachedNodeName(Integer uniqueId){
-        return (String)redisTemplate.opsForValue().get(uniqueId + "id");
+    void cacheSingleLinksCount(Integer id, Integer count){
+        redisTemplate.opsForValue().set(id + "singleLinksCount", count);
     }
 
-    private Integer getCachedUniqueId(String name){
-        return (Integer)redisTemplate.opsForValue().get(name + "name");
+    Integer getCachedSingleLinksCount(Integer id){
+        return (Integer)redisTemplate.opsForValue().get(id + "singleLinksCount");
     }
+}
 
-    private void cacheIdToName(Integer id, String name){
-        redisTemplate.opsForValue().setIfAbsent(id + "id", name);
-    }
+@Component
+class ThreadPoolHelper{
+    ExecutorService es;
 
-    private void cacheNameToId(String name, Integer id){
-        redisTemplate.opsForValue().setIfAbsent(name + "name", id);
-    }
-
-
-    private List<List<RelationById>> getCachedRelationBetween(Integer id1, List<Integer> id2s){
-        List<List<RelationById>> list = redisTemplate.opsForHash().multiGet(id1 + "relation", id2s);
-        return list;
-    }
-
-
-    private void saveRelationsBetween(Map<Integer, Set<RelationById>> nonCachedRelations){
-        if(nonCachedRelations.size() == 0){
-            return;
-        }
-        nonCachedRelations.forEach(this::saveOneSetRelations);
-    }
-
-    private void saveOneSetRelations(Integer id, Set<RelationById> set){
-        if(set.size() == 0){
-            return;
-        }
-        Map<Integer, List<RelationById>> m = new HashMap<>(set.size());
-        set.forEach(rbi -> {
-            m.compute(rbi.getEndUniqueId(), (k, v) -> {
-                if(v == null){
-                    v = new ArrayList<>(set.size());
-                }
-                v.add(rbi);
-                return v;
-            });
-        });
-        redisTemplate.opsForHash().putAll(id + "relation", m);
-    }
-
-
-    private Map<Integer, Set<RelationById>> getBatchRelations(Map<Integer, List<Integer>> pairs){
-        return mongoQueryService.getBatchRelations(pairs);
+    @PostConstruct
+    private void init(){
+        es = new ThreadPoolExecutor(5,
+                20,
+                60,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(),
+                new ThreadPoolExecutor.AbortPolicy());
     }
 }

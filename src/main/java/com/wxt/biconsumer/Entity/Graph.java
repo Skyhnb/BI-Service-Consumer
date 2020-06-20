@@ -1,5 +1,6 @@
 package com.wxt.biconsumer.Entity;
 
+import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.annotation.JSONField;
 import com.wxt.biconsumer.Entity.MongoEntity.RelationById;
 
@@ -7,14 +8,14 @@ import java.util.*;
 
 public class Graph {
     @JSONField(name = "nodes")
-    private Map<Integer, Node> nodes;
+    private Map<String, Node> nodes;
 
 
-    public Map<Integer, Node> getNodes() {
+    public Map<String, Node> getNodes() {
         return nodes;
     }
 
-    public void setNodes(Map<Integer, Node> nodes) {
+    public void setNodes(Map<String, Node> nodes) {
         this.nodes = nodes;
     }
 
@@ -26,30 +27,20 @@ public class Graph {
         idToNames.forEach((id, name) -> {
             Node n = new Node();
             n.name = name;
-            g.nodes.put(id, n);
+            n.links = new HashSet<>(4);
+            g.nodes.put(id.toString(), n);
         });
-        g.nodes.forEach((id, node) -> {
-            relations.computeIfPresent(id, (k, v) -> {
-                if(node.links == null){
-                    node.links = new HashSet<>(16);
-                }
-                v.forEach(rbi -> {
-                    Link link = new Link();
-                    int direction, otherId;
-                    if(rbi.getStartUniqueId() == id){
-                        direction = 1;
-                        otherId = rbi.getEndUniqueId();
-                    }else{
-                        direction = -1;
-                        otherId = rbi.getStartUniqueId();
-                    }
-                    link.setDirection(direction);
-                    link.setLinkedUniqueId(otherId);
-                    node.links.add(link);
-                });
+        relations.values().forEach(s -> s.forEach(relationById -> {
+            g.nodes.compute(String.valueOf(relationById.getStartUniqueId()), (k, v) -> {
+                assert v != null && v.links != null;
+                Link link = new Link();
+                link.setLinkedUniqueId(relationById.getEndUniqueId());
+                link.setRelation(relationById.getRelation());
+                link.setName(idToNames.get(relationById.getEndUniqueId()));
+                v.links.add(link);
                 return v;
             });
-        });
+        }));
         return g;
     }
 
@@ -77,17 +68,27 @@ public class Graph {
     }
 
     public static class Link{
-        @JSONField(name = "d")
-        private int direction;
         @JSONField(name = "u")
         private int linkedUniqueId;
+        @JSONField(name = "n")
+        private String name;
+        @JSONField(name = "r")
+        private String relation;
 
-        public int getDirection() {
-            return direction;
+        public String getRelation() {
+            return relation;
         }
 
-        public void setDirection(int direction) {
-            this.direction = direction;
+        public void setRelation(String relation) {
+            this.relation = relation;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
         }
 
         public int getLinkedUniqueId() {
@@ -97,5 +98,13 @@ public class Graph {
         public void setLinkedUniqueId(int linkedUniqueId) {
             this.linkedUniqueId = linkedUniqueId;
         }
+    }
+
+
+    public static void main(String[] args) {
+        Graph g = new Graph();
+        g.setNodes(new HashMap<>());
+        g.getNodes().put("1", new Node());
+        System.out.println(JSON.toJSONString(g));
     }
 }

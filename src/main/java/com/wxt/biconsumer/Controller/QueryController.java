@@ -52,6 +52,20 @@ public class QueryController {
         return wrap(res);
     }
 
+    @GetMapping("/getSingleLinksCountByName/{nodeName}")
+    @ApiOperation("根据名称，获取与他直接相连的节点个数")
+    public ResponseFormat getSingleLinksCountByName(@PathVariable("nodeName")String nodeName){
+        Object res = queryService.getSingleLinksCountByName(nodeName);
+        return wrap(res);
+    }
+
+    @GetMapping("/getSingleLinksCountById/{id}")
+    @ApiOperation("根据id，获取与他直接相连的节点个数")
+    public ResponseFormat getSingleLinksCountByName(@PathVariable("id")Integer id){
+        Object res = queryService.getSingleLinksCountById(id);
+        return wrap(res);
+    }
+
 
     //要求(b)
     @GetMapping("/getPathsByTwoNodes")
